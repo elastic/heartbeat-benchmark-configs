@@ -7,9 +7,9 @@ setup.template.settings:
   index.number_of_shards: 1
   index.codec: best_compression
 
-cloud.id: "$cloud_id"
+cloud.id: "${cloudid}"
 
-cloud.auth: "$cloud_auth"
+cloud.auth: "${cloudauth}"
 
 output.elasticsearch:
   hosts: ["localhost:9200"]
