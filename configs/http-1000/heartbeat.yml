@@ -15,4 +15,4 @@ output.elasticsearch:
   hosts: ["localhost:9200"]
 
 processors:
-  - add_observer_metadata: ~
+  #- add_observer_metadata: ~
