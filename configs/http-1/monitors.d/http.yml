@@ -1,4 +1,0 @@
-- type: http
-  urls: ["URL"]
-  schedule: '@every 10s'
-  timeout: 1s

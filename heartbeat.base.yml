@@ -1,0 +1,15 @@
+heartbeat.config.monitors:
+  path: ${path.config}/monitors.d/*.yml
+  reload.enabled: false
+  reload.period: 5s
+
+heartbeat.monitors:
+
+setup.template.settings:
+  index.number_of_shards: 1
+  index.codec: best_compression
+
+output.elasticsearch:
+  hosts: ["localhost:9200"]
+
+processors:

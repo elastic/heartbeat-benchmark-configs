@@ -1,0 +1,128 @@
+#!/usr/bin/env ruby
+
+require 'yaml'
+require 'fileutils'
+
+class Play
+  attr_reader :home_path, :config_path, :data_path, :logs_path,
+ 	      :heartbeat_path, :cloud_id, :cloud_auth,
+	      :monitors, :domain, :run_for, :name
+
+  def initialize(src)
+    @name = src["name"]
+    
+    @home_path = src["home_path"]
+    @config_path = File.join(@home_path, "config")
+    @data_path = File.join(@home_path, "data")
+    @logs_path = File.join(@home_path, "logs")
+    
+    @heartbeat_path = src["heartbeat_path"]
+    @cloud_id = src["cloud_id"]
+    @cloud_auth = src["cloud_auth"]
+    @monitors = src["monitors"]
+    @domain = src["domain"]
+
+    @run_for = src["run_for"]
+  end
+  
+  def gen_config()
+    FileUtils.rm_rf(self.home_path)
+    FileUtils.mkdir_p(self.config_path)
+    FileUtils.mkdir_p(self.data_path)
+    FileUtils.mkdir_p(self.logs_path)
+
+
+    config = YAML.load_file('heartbeat.base.yml')
+
+    config['heartbeat.monitors'] = self.monitors.times.with_index.map do |m,i|
+      {
+        "type" => "http",
+        "id" => "monitor-#{i}",
+        "urls" => ["http://#{self.domain}"],
+        "schedule" => "@every 10s"
+      }
+    end
+  
+    File.open(File.join(self.config_path, 'heartbeat.yml'), 'w') do |f|
+      f << config.to_yaml
+    end
+
+    FileUtils.chmod_R(0600, File.join(self.config_path, 'heartbeat.yml'))
+  end
+
+  def run()
+    self.gen_config()
+
+    cmd = [
+      self.heartbeat_path,
+      '-c', 'heartbeat.yml',
+      "--path.config", self.config_path,
+      "--path.home", self.home_path,
+      "--path.data", self.data_path,
+      "--path.logs", self.logs_path,
+      "-E", "cloud.id=\"#{self.cloud_id}\"",
+      "-E", "cloud.auth=\"#{self.cloud_auth}\""
+    ]
+
+    puts "Executing: #{cmd.join(' ')}"
+  
+    pid = fork do
+      exec *cmd
+    end
+
+    cpu_samples = []
+    rss_samples = []
+    started = Time.now()
+    while Time.now()-started < self.run_for do
+      cpu, rss = `ps u -p #{pid} | tail -n 1 | awk '{print $3,$5}'`.split()
+      cpu_samples << cpu.to_f
+      rss_samples << rss.to_i
+      sleep 1
+    end
+
+    puts "Sleeping for #{self.run_for}"
+    sleep self.run_for
+
+
+    puts "Killing subprocess #{pid}"
+    Process.kill("KILL", pid)
+    Process.waitpid(pid)
+
+    errs = `grep ERROR #{self.logs_path}/* | wc -l`.to_i
+    warns = `grep WARN #{self.logs_path}/* | wc -l`.to_i
+    @summary = {
+      avg_cpu: cpu_samples.reduce(:+) / cpu_samples.size,
+      max_cpu: cpu_samples.max,
+      avg_rss: rss_samples.reduce(:+) / rss_samples.size,
+      max_rss: rss_samples.max,
+      error_logs: errs,
+      warn_logs: warns,
+    }
+
+    puts @summary.to_yaml
+  end
+  
+  def summary_header()
+    return "name, " + @summary.keys.sort.join(", ")
+  end
+
+  def summary()
+    return "\"#{self.name}\", " + @summary.keys.sort.map {|k| "\"#{@summary[k]}\"" }.join(", ")
+  end
+end
+
+def main()
+  playbook = YAML.load_file('playbook.yml')
+  plays = playbook["plays"].map do |play_src|
+    Play.new(play_src.merge(playbook['global']))
+  end
+  
+  plays.each(&:run)
+
+  puts plays.first.summary_header()
+  plays.each do |play|
+    puts play.summary()
+  end
+end
+
+main()

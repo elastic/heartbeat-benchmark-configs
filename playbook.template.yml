@@ -1,0 +1,17 @@
+# Copy this file to playbook.yml and fill in all empty vars
+global:
+  domain: ""
+  cloud_id: ""
+  cloud_auth: ""
+  heartbeat_path: "/usr/bin/env heartbeat"
+  home_path: './tmp-home'
+  run_for: 60
+plays:
+- name: 1-mon
+  monitors: 1
+- name: 100-mon
+  monitors: 100
+- name: 1000-mon
+  monitors: 1000
+- name: 10000-mon
+  monitors: 10000

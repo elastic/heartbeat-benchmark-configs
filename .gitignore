@@ -1,0 +1,4 @@
+tmp-home
+*.swp
+results
+playbook.yml
