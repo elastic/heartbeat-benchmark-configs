@@ -2,6 +2,10 @@
 
 require 'yaml'
 require 'fileutils'
+require 'net/http'
+require 'base64'
+require 'uri'
+require 'json'
 
 class Play
   attr_reader :home_path, :config_path, :data_path, :logs_path,
@@ -23,14 +27,52 @@ class Play
     @domain = src["domain"]
 
     @run_for = src["run_for"]
+
+    cluster_zone_domain, cluster_sub_domain, extra = Base64.decode64(cloud_id.split(":")[1]).split("$") 
+    cluster_domain = "#{cluster_sub_domain}.#{cluster_zone_domain}"
+    @es_user, @es_pass = cloud_auth.split(":")
+    @cluster_url = URI("https://#{@us_user}:#{@es_pass}@#{cluster_domain}")
+    puts "CLUSTER URL: #{@cluster_url}"
+    @cluster_client = Net::HTTP.new(cluster_domain, 443)
+    @cluster_client.use_ssl = true
   end
   
+  def clear_cluster_data
+    del = Net::HTTP::Delete.new("/heartbeat-*")
+    del.basic_auth(@es_user, @es_pass)
+    puts @cluster_client.request(del).inspect
+  end
+
+  def agg_docs
+    req = Net::HTTP::Get.new("/heartbeat-*/_search?size=0")
+    req.basic_auth(@es_user, @es_pass)
+    req["Content-Type"] = "application/json"
+    req.body = {
+      "aggs" => {
+        "status" => {
+          "filters" => {
+            "filters" => {
+              "up" => {"match" => {"monitor.status" => "up"}},
+              "down" => {"match" => {"monitor.status" => "down"}}
+            }
+          }
+        }
+      }
+    }.to_json
+    body = JSON.parse(@cluster_client.request(req).body)
+    res = {
+      docs_total: body["hits"]["total"]["value"],
+      docs_up: body["aggregations"]["status"]["buckets"]["up"]["doc_count"],
+      docs_down: body["aggregations"]["status"]["buckets"]["down"]["doc_count"],
+    }
+    res
+  end
+
   def gen_config()
     FileUtils.rm_rf(self.home_path)
     FileUtils.mkdir_p(self.config_path)
     FileUtils.mkdir_p(self.data_path)
     FileUtils.mkdir_p(self.logs_path)
-
 
     config = YAML.load_file('heartbeat.base.yml')
 
@@ -51,6 +93,7 @@ class Play
   end
 
   def run()
+    self.clear_cluster_data()
     self.gen_config()
 
     cmd = [
@@ -91,23 +134,30 @@ class Play
     errs = `grep ERROR #{self.logs_path}/* | wc -l`.to_i
     warns = `grep WARN #{self.logs_path}/* | wc -l`.to_i
     @summary = {
-      avg_cpu: cpu_samples.reduce(:+) / cpu_samples.size,
-      max_cpu: cpu_samples.max,
-      avg_rss: rss_samples.reduce(:+) / rss_samples.size,
-      max_rss: rss_samples.max,
-      error_logs: errs,
-      warn_logs: warns,
-    }
+      avg_cpu_pct: cpu_samples.reduce(:+) / cpu_samples.size,
+      max_cpu_pct: cpu_samples.max,
+      avg_rss_mib: (rss_samples.reduce(:+) / 1024) / rss_samples.size,
+      max_rss_mib: rss_samples.max  / 1024, # kib to mib
+      num_error_logs: errs,
+      num_warn_logs: warns,
+    }.merge(self.agg_docs)
 
     puts @summary.to_yaml
   end
   
   def summary_header()
-    return "name, " + @summary.keys.sort.join(", ")
+    return "name, monitors, " + @summary.keys.sort.join(", ")
   end
 
   def summary()
-    return "\"#{self.name}\", " + @summary.keys.sort.map {|k| "\"#{@summary[k]}\"" }.join(", ")
+    return "\"#{self.name}\", #{self.monitors}," + 
+             @summary.keys.sort.map do |k| 
+               v = @summary[k]
+               if k =~ /_pct$/
+                 v = "#{v}%"
+               end
+               "\"#{v}\""
+             end.join(", ")
   end
 end
 
